@@ -1,6 +1,10 @@
 # This is cJTAG branch.
-Currently only oscan1_short mode is supported.
-I am using Rockchip RV1106 MCU as bringup chip.
+Currently only oscan1_short mode is supported.I am using Rockchip RV1106 MCU as bringup chip.
+
+| Pin name | GPIO   | Pico Pin Number |
+|:---------|:-------| -          |
+| TCKC     | GPIO18 | 24         |
+| TMSC     | GPIO19 | 25         |
 
 
 # PICO-DIRTYJTAG
