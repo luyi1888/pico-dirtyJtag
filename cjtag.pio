@@ -1,0 +1,140 @@
+;
+; Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+;
+; SPDX-License-Identifier: BSD-3-Clause
+;
+
+.program cjtag_escape
+.side_set 1 opt
+start:
+    set y, 1 side 0
+    pull block
+    out x, 32 side 1 [3]
+loop:
+    jmp !x start
+    mov pins, y
+    mov y, !y
+    jmp x-- loop
+
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+static inline void cjtag_escape_program_init(PIO pio, uint sm, uint offset, uint tckc_pin, uint tmsc_pin) {
+    pio_sm_config c = cjtag_escape_program_get_default_config(offset);
+    
+    pio_gpio_init(pio, tckc_pin);
+    pio_gpio_init(pio, tmsc_pin);
+    
+    pio_sm_set_consecutive_pindirs(pio, sm, tckc_pin, 2, true);
+    sm_config_set_sideset_pins(&c, tckc_pin);
+
+    // Map the state machine's OUT pin group to one pin, namely the `pin`
+    // parameter to this function.
+    sm_config_set_out_pins(&c, tmsc_pin, 1);
+
+    float div = clock_get_hz(clk_sys) / (1000000 * 10);
+    sm_config_set_clkdiv(&c, div);
+    //sm_config_set_clkdiv_int_frac(&c, 0x0a, 0x6a);
+    sm_config_set_out_shift(&c, true, false, 32);
+
+    // Load our configuration, and jump to the start of the program
+    pio_sm_init(pio, sm, offset, &c);
+    // Set the state machine running
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}
+
+
+.program cjtag_writeTMS
+.side_set 1 opt
+.wrap_target
+start:
+    pull block
+    out x, 8 side 0
+loop:
+    jmp !x final side 0 [3]
+    out pins, 1
+    jmp x-- loop side 1 [4]
+final:
+    mov osr, null side 0
+    jmp start
+.wrap
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+static inline void cjtag_writeTMS_program_init(PIO pio, uint sm, uint offset, uint tckc_pin, uint tmsc_pin) {
+    pio_sm_config c = cjtag_writeTMS_program_get_default_config(offset);
+    
+    pio_gpio_init(pio, tckc_pin);
+    pio_gpio_init(pio, tmsc_pin);
+    
+    pio_sm_set_consecutive_pindirs(pio, sm, tckc_pin, 2, true);
+    sm_config_set_sideset_pins(&c, tckc_pin);
+
+    // Map the state machine's OUT pin group to one pin, namely the `pin`
+    // parameter to this function.
+    sm_config_set_out_pins(&c, tmsc_pin, 1);
+
+    float div = clock_get_hz(clk_sys) / (1000000 * 10);
+    sm_config_set_clkdiv(&c, div);
+    //sm_config_set_clkdiv_int_frac(&c, 0x0a, 0x6a);
+    sm_config_set_out_shift(&c, true, false, 32);
+
+    // Load our configuration, and jump to the start of the program
+    pio_sm_init(pio, sm, offset, &c);
+    // Set the state machine running
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}
+
+.program cjtag_tick
+.side_set 1 opt
+    pull
+    out y, 1 side 0 [2]
+    out x, 31
+loop:
+    out pins, 1
+    nop side 1 [4]
+    nop side 0 [3]
+    mov pins, y
+    nop side 1 [4]
+    set pindirs, 0 side 0 [4]
+    in pins, 1
+    nop side 1
+    set pindirs, 1 [3]
+    jmp x-- loop side 0
+    push
+
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+static inline void cjtag_tick_program_init(PIO pio, uint sm, uint offset, uint tckc_pin, uint tmsc_pin) {
+    pio_sm_config c = cjtag_tick_program_get_default_config(offset);
+    
+    pio_gpio_init(pio, tckc_pin);
+    pio_gpio_init(pio, tmsc_pin);
+    
+    pio_sm_set_consecutive_pindirs(pio, sm, tckc_pin, 2, true);
+    sm_config_set_sideset_pins(&c, tckc_pin);
+
+    // Map the state machine's OUT pin group to one pin, namely the `pin`
+    // parameter to this function.
+    sm_config_set_out_pins(&c, tmsc_pin, 1);
+    sm_config_set_in_pins(&c, tmsc_pin);
+    sm_config_set_set_pins(&c, tmsc_pin, 1);
+
+    float div = clock_get_hz(clk_sys) / (2000000 * 10);
+    sm_config_set_clkdiv(&c, div);
+    //sm_config_set_clkdiv_int_frac(&c, 0x0a, 0x6a);
+    sm_config_set_out_shift(&c, false, true, 8);
+    sm_config_set_in_shift(&c, false, true, 8);
+
+    // Load our configuration, and jump to the start of the program
+    pio_sm_init(pio, sm, offset, &c);
+    // Set the state machine running
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

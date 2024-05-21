@@ -26,15 +26,15 @@ uint8_t pio_jtag_write_tms_blocking(const pio_jtag_inst_t *jtag, bool tdi, bool 
 
 void jtag_set_clk_freq(const pio_jtag_inst_t *jtag, uint freq_khz);
 
+void unsetOscan1();
+
 void jtag_transfer(const pio_jtag_inst_t *jtag, uint32_t length, const uint8_t* in, uint8_t* out);
 
 uint8_t jtag_strobe(const pio_jtag_inst_t *jtag, uint32_t length, bool tms, bool tdi);
 
 
-static inline void jtag_set_tms(const pio_jtag_inst_t *jtag, bool value)
-{
-    gpio_put(jtag->pin_tms, value);
-}
+static inline void jtag_set_tms(const pio_jtag_inst_t *jtag, bool value);
+
 static inline void jtag_set_rst(const pio_jtag_inst_t *jtag, bool value)
 {
     /* Change the direction to out to drive pin to 0 or to in to emulate open drain */

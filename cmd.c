@@ -28,7 +28,7 @@
 #include <hardware/clocks.h>
 #include <hardware/gpio.h>
 
-#include "jtag.pio.h"
+#include "cjtag.pio.h"
 #include "tusb.h"
 #include "pio_jtag.h"
 #include "cmd.h"
@@ -210,6 +210,7 @@ void cmd_handle(pio_jtag_inst_t* jtag, uint8_t* rxbuf, uint32_t count, uint8_t* 
 static uint32_t cmd_info(uint8_t *buffer) {
   char info_string[10] = "DJTAG2\n";
   memcpy(buffer, info_string, 10);
+  unsetOscan1();
   return 10;
 }
 
@@ -259,9 +260,9 @@ static void cmd_setsig(pio_jtag_inst_t* jtag, const uint8_t *commands) {
     jtag_set_tdi(jtag, signal_status & SIG_TDI);
   }
 
-  if (signal_mask & SIG_TMS) {
-    jtag_set_tms(jtag, signal_status & SIG_TMS);
-  }
+  //if (signal_mask & SIG_TMS) {
+  //  jtag_set_tms(jtag, signal_status & SIG_TMS);
+  //}
   
   if (signal_mask & SIG_TRST) {
     jtag_set_trst(jtag, signal_status & SIG_TRST);

@@ -33,7 +33,7 @@ add_executable(dirtyJtag
 
 target_include_directories(dirtyJtag PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-pico_generate_pio_header(dirtyJtag ${CMAKE_CURRENT_LIST_DIR}/jtag.pio)
+pico_generate_pio_header(dirtyJtag ${CMAKE_CURRENT_LIST_DIR}/cjtag.pio)
 
 pico_set_program_name(dirtyJtag "dirtyJtag")
 pico_set_program_version(dirtyJtag "0.1")

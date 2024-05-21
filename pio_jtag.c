@@ -1,9 +1,13 @@
 #include <hardware/clocks.h>
 #include "hardware/dma.h"
 #include "pio_jtag.h"
-#include "jtag.pio.h"
+#include "cjtag.pio.h"
 
 void jtag_task();//to process USB OUT packets while waiting for DMA to finish
+
+
+static bool oscan1_mode = false;
+static bool isInit = false;
 
 #define DMA
 
@@ -53,11 +57,11 @@ void dma_init()
         tx_c = dma_channel_get_default_config(tx_dma_chan);
         channel_config_set_transfer_data_size(&tx_c, DMA_SIZE_8);
         channel_config_set_read_increment(&tx_c, true);
-        channel_config_set_dreq(&tx_c, DREQ_PIO0_TX0);
+        channel_config_set_dreq(&tx_c, DREQ_PIO0_TX2);
             dma_channel_configure(
             tx_dma_chan,
             &tx_c,
-            &pio0_hw->txf[0], // Write address (only need to set this once)
+            &pio0_hw->txf[2], // Write address (only need to set this once)
             NULL,             // Don't provide a read address yet
             0,                // Don't provide the count yet
             false             // Don't start yet
@@ -69,12 +73,12 @@ void dma_init()
         channel_config_set_transfer_data_size(&rx_c, DMA_SIZE_8);
         channel_config_set_write_increment(&rx_c, false);
         channel_config_set_read_increment(&rx_c, false);
-        channel_config_set_dreq(&rx_c, DREQ_PIO0_RX0);
+        channel_config_set_dreq(&rx_c, DREQ_PIO0_RX2);
         dma_channel_configure(
             rx_dma_chan,
             &rx_c,
             NULL,             // Dont provide a write address yet
-            &pio0_hw->rxf[0], // Read address (only need to set this once)
+            &pio0_hw->rxf[2], // Read address (only need to set this once)
             0,                // Don't provide the count yet
             false             // Don't start yet
             );
@@ -83,14 +87,101 @@ void dma_init()
 
 }
 
+static inline bool pio_sm_is_running_stalled(PIO pio, uint sm)
+{
+    check_pio_param(pio);
+    check_sm_param(sm);
+    pio->fdebug = 0x1000000 << sm;
+    return !!(pio->fdebug & (0x1000000 << sm));
+}
+
+
+static inline void rv_raw_tms(uint32_t command)
+{
+    pio_sm_put_blocking(pio0, 1, command);
+    while(!pio_sm_is_running_stalled(pio0, 1)) tight_loop_contents();
+}
+
+
+static inline uint32_t rv_tap_tick(uint32_t tms, uint32_t tdi)
+{
+    uint32_t command = 0x1;
+    uint32_t rt = 0;
+    if(oscan1_mode)
+    {
+        command |= (tdi & 0x1) << 8;
+        command |= (tms & 0x1) << 9;
+        command ^= 0x11111100;
+        pio_sm_put_blocking(pio0, 2, command);
+        while(!pio_sm_is_running_stalled(pio0, 2)) tight_loop_contents();
+        rt = pio_sm_get_blocking(pio0, 2);
+    }
+    else
+    {
+        command |= (tms & 0x1) << 8;
+        pio_sm_put_blocking(pio0, 1, command);
+        while(!pio_sm_is_running_stalled(pio0, 1)) tight_loop_contents();
+    }
+    return rt;
+}
+
+static inline void rvl_tap_oac(void)
+{
+	rv_tap_tick(0 , 0);
+	rv_tap_tick(0 , 0);
+	rv_tap_tick(1 , 0);
+	rv_tap_tick(1 , 0);
+}
+
+static inline void rvl_tap_ec(void)
+{
+	rv_tap_tick(0 , 0);
+	rv_tap_tick(0 , 0);
+	rv_tap_tick(0 , 0);
+	rv_tap_tick(1 , 0);
+}
+
+static inline void rvl_tap_cp(void)
+{
+	rv_tap_tick(0 , 0);
+	rv_tap_tick(0 , 0);
+	rv_tap_tick(0 , 0);
+	rv_tap_tick(0 , 0);
+}
+
+static inline void rvl_tap_escape(uint8_t n)
+{
+	pio_sm_put_blocking(pio0, 0, n);
+    while(!pio_sm_is_running_stalled(pio0, 0)) tight_loop_contents();
+}
+
+void initOscan1()
+{
+    oscan1_mode = false;
+    rvl_tap_escape(8);
+    rv_raw_tms(0xFFFFFF16);
+    rv_tap_tick(0, 0);
+    rvl_tap_escape(6);
+    rvl_tap_oac();
+    rvl_tap_ec();
+    rvl_tap_cp();
+    oscan1_mode = true;
+    //rv_tap_tick(0, 0);// TLR to RTI
+}
+
+void unsetOscan1()
+{
+    oscan1_mode = false;
+}
 
 void __time_critical_func(pio_jtag_write_blocking)(const pio_jtag_inst_t *jtag, const uint8_t *bsrc, size_t len) 
 {
+    PIO pio = pio0;
     size_t byte_length = (len+7 >> 3);
     size_t last_shift = ((byte_length << 3) - len);
     size_t tx_remain = byte_length, rx_remain = last_shift ? byte_length : byte_length+1;
-    io_rw_8 *txfifo = (io_rw_8 *) &jtag->pio->txf[jtag->sm];
-    io_rw_8 *rxfifo = (io_rw_8 *) &jtag->pio->rxf[jtag->sm];
+    io_rw_8 *txfifo = (io_rw_8 *) &pio->txf[2];
+    io_rw_8 *rxfifo = (io_rw_8 *) &pio->rxf[2];
     uint8_t x; // scratch local to receive data
     //kick off the process by sending the len to the tx pipeline
     *(io_rw_32*)txfifo = len-1;
@@ -117,12 +208,12 @@ void __time_critical_func(pio_jtag_write_blocking)(const pio_jtag_inst_t *jtag, 
     {
         while (tx_remain || rx_remain) 
         {
-            if (tx_remain && !pio_sm_is_tx_fifo_full(jtag->pio, jtag->sm))
+            if (tx_remain && !pio_sm_is_tx_fifo_full(pio, 2))
             {
                 *txfifo = *bsrc++;
                 --tx_remain;
             }
-            if (rx_remain && !pio_sm_is_rx_fifo_empty(jtag->pio, jtag->sm))
+            if (rx_remain && !pio_sm_is_rx_fifo_empty(pio, 2))
             {
                 x = *rxfifo;
                 --rx_remain;
@@ -134,12 +225,13 @@ void __time_critical_func(pio_jtag_write_blocking)(const pio_jtag_inst_t *jtag, 
 void __time_critical_func(pio_jtag_write_read_blocking)(const pio_jtag_inst_t *jtag, const uint8_t *bsrc, uint8_t *bdst,
                                                          size_t len) 
 {
+    PIO pio = pio0;
     size_t byte_length = (len+7 >> 3);
     size_t last_shift = ((byte_length << 3) - len);
     size_t tx_remain = byte_length, rx_remain = last_shift ? byte_length : byte_length+1;
     uint8_t* rx_last_byte_p = &bdst[byte_length-1];
-    io_rw_8 *txfifo = (io_rw_8 *) &jtag->pio->txf[jtag->sm];
-    io_rw_8 *rxfifo = (io_rw_8 *) &jtag->pio->rxf[jtag->sm];
+    io_rw_8 *txfifo = (io_rw_8 *) &pio->txf[2];
+    io_rw_8 *rxfifo = (io_rw_8 *) &pio->rxf[2];
     //kick off the process by sending the len to the tx pipeline
     *(io_rw_32*)txfifo = len-1;
 #ifdef DMA
@@ -165,12 +257,12 @@ void __time_critical_func(pio_jtag_write_read_blocking)(const pio_jtag_inst_t *j
     {
         while (tx_remain || rx_remain) 
         {
-            if (tx_remain && !pio_sm_is_tx_fifo_full(jtag->pio, jtag->sm))
+            if (tx_remain && !pio_sm_is_tx_fifo_full(pio, 2))
             {
                 *txfifo = *bsrc++;
                 --tx_remain;
             }
-            if (rx_remain && !pio_sm_is_rx_fifo_empty(jtag->pio, jtag->sm))
+            if (rx_remain && !pio_sm_is_rx_fifo_empty(pio, 2))
             {
                 *bdst++ = *rxfifo;
                 --rx_remain;
@@ -186,16 +278,26 @@ void __time_critical_func(pio_jtag_write_read_blocking)(const pio_jtag_inst_t *j
 
 uint8_t __time_critical_func(pio_jtag_write_tms_blocking)(const pio_jtag_inst_t *jtag, bool tdi, bool tms, size_t len)
 {
+    PIO pio = pio0;
     size_t byte_length = (len+7 >> 3);
     size_t last_shift = ((byte_length << 3) - len);
     size_t tx_remain = byte_length, rx_remain = last_shift ? byte_length : byte_length+1;
-    io_rw_8 *txfifo = (io_rw_8 *) &jtag->pio->txf[jtag->sm];
-    io_rw_8 *rxfifo = (io_rw_8 *) &jtag->pio->rxf[jtag->sm];
+    io_rw_8 *txfifo = (io_rw_8 *) &pio->txf[2];
+    io_rw_8 *rxfifo = (io_rw_8 *) &pio->rxf[2];
     uint8_t x; // scratch local to receive data
-    uint8_t tdi_word = tdi ? 0xFF : 0x0;
-    gpio_put(jtag->pin_tms, tms);
+    //in cJTAG, tdi is reverse
+    uint8_t tdi_word = tdi ? 0x00 : 0xFF;
+    uint32_t temp;
+    temp = len - 1;
     //kick off the process by sending the len to the tx pipeline
-    *(io_rw_32*)txfifo = len-1;
+    if(tms)
+    {
+        *(io_rw_32*)txfifo = (len - 1) | 0x80000000;
+    }
+    else
+    {
+        *(io_rw_32*)txfifo = (len - 1) & 0x7FFFFFFF;
+    }
 #ifdef DMA
     if (byte_length > 4)
     {   
@@ -219,12 +321,12 @@ uint8_t __time_critical_func(pio_jtag_write_tms_blocking)(const pio_jtag_inst_t 
     {
         while (tx_remain || rx_remain) 
         {
-            if (tx_remain && !pio_sm_is_tx_fifo_full(jtag->pio, jtag->sm)) 
+            if (tx_remain && !pio_sm_is_tx_fifo_full(pio, 2)) 
             {
                 *txfifo = tdi_word;
                 --tx_remain;
             }
-            if (rx_remain && !pio_sm_is_rx_fifo_empty(jtag->pio, jtag->sm)) 
+            if (rx_remain && !pio_sm_is_rx_fifo_empty(pio, 2)) 
             {
                 x = *rxfifo;
                 --rx_remain;
@@ -257,24 +359,19 @@ static void init_pins(uint pin_tck, uint pin_tdi, uint pin_tdo, uint pin_tms, ui
 
 void init_jtag(pio_jtag_inst_t* jtag, uint freq, uint pin_tck, uint pin_tdi, uint pin_tdo, uint pin_tms, uint pin_rst, uint pin_trst)
 {
-    init_pins(pin_tck, pin_tdi, pin_tdo, pin_tms, pin_rst, pin_trst);
-    jtag->pin_tdi = pin_tdi;
-    jtag->pin_tdo = pin_tdo;
-    jtag->pin_tck = pin_tck;
-    jtag->pin_tms = pin_tms;
-    #if !( BOARD_TYPE == BOARD_QMTECH_RP2040_DAUGHTERBOARD )
-    jtag->pin_rst = pin_rst;
-    jtag->pin_trst = pin_trst;
-    #endif
-    uint16_t clkdiv = 31;  // around 1 MHz @ 125MHz clk_sys
-    pio_jtag_init(jtag->pio, jtag->sm,
-                    clkdiv,
-                    pin_tck,
-                    pin_tdi,
-                    pin_tdo
-                 );
-
-    jtag_set_clk_freq(jtag, freq);
+    oscan1_mode = false;
+    //uint nitx = 0;
+    if(!isInit)
+    {
+        PIO pio = pio0;
+        uint offset0 = pio_add_program(pio, &cjtag_escape_program);
+        cjtag_escape_program_init(pio, 0, offset0, pin_tck, pin_tms);
+        uint offset1 = pio_add_program(pio, &cjtag_writeTMS_program);
+        cjtag_writeTMS_program_init(pio, 1, offset1, pin_tck, pin_tms);
+        uint offset2 = pio_add_program(pio, &cjtag_tick_program);
+        cjtag_tick_program_init(pio, 2, offset2, pin_tck, pin_tms);
+        isInit = true;
+    }
 }
 
 void jtag_set_clk_freq(const pio_jtag_inst_t *jtag, uint freq_khz) {
@@ -286,8 +383,6 @@ void jtag_set_clk_freq(const pio_jtag_inst_t *jtag, uint freq_khz) {
 
 void jtag_transfer(const pio_jtag_inst_t *jtag, uint32_t length, const uint8_t* in, uint8_t* out)
 {
-    /* set tms to low */
-    jtag_set_tms(jtag, false);
 
     if (out)
         pio_jtag_write_read_blocking(jtag, in, out, length);
@@ -296,8 +391,13 @@ void jtag_transfer(const pio_jtag_inst_t *jtag, uint32_t length, const uint8_t* 
 
 }
 
+
 uint8_t jtag_strobe(const pio_jtag_inst_t *jtag, uint32_t length, bool tms, bool tdi)
 {
+    if(!oscan1_mode)
+    {
+        initOscan1();
+    }
     return pio_jtag_write_tms_blocking(jtag, tdi, tms, length);
 }
 

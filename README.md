@@ -1,3 +1,8 @@
+# This is cJTAG branch.
+Currently only oscan1_short mode is supported.
+I am using Rockchip RV1106 MCU as bringup chip.
+
+
 # PICO-DIRTYJTAG
 
 This code allows the Pico to become a JTAG cable.  It uses the PIO unit to produce and capture the JTAG signals.  This is a port of the excellent [DirtyJtag project](https://github.com/jeanthom/DirtyJTAG)
