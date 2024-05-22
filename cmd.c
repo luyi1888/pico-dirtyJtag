@@ -208,7 +208,7 @@ void cmd_handle(pio_jtag_inst_t* jtag, uint8_t* rxbuf, uint32_t count, uint8_t* 
 }
 
 static uint32_t cmd_info(uint8_t *buffer) {
-  char info_string[10] = "DJTAG2\n";
+  char info_string[10] = "DCJTAG\n";
   memcpy(buffer, info_string, 10);
   unsetOscan1();
   return 10;
